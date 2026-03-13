@@ -1,412 +1,494 @@
+// /api/extract.js - Enhanced with OCR.space API for better extraction
 const pdfParse = require('pdf-parse');
 const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
-// Configuration for biomarkers with multiple pattern variations
-const BIOMARKER_CONFIG = [
-  { 
-    id: 'hemoglobin', 
-    name: 'Hemoglobin', 
-    unit: 'g/dL', 
-    category: 'Blood',
-    patterns: [
-      /hemoglobin[\s\w\/]*([\d.,]+)\s*(?:g[\s\/]*dL|g[\s\/]*dL|gm[\s\/]*dL|g%|gm%|g\s*%|g\s*\/\s*dL)/i,
-      /hb[^a-zA-Z]*([\d.,]+)\s*(?:g[\s\/]*dL|gm[\s\/]*dL)/i,
-      /hgb[^a-zA-Z]*([\d.,]+)\s*(?:g[\s\/]*dL|gm[\s\/]*dL)/i
-    ]
-  },
-  { 
-    id: 'glucose', 
-    name: 'Glucose', 
-    unit: 'mg/dL', 
-    category: 'Metabolic',
-    patterns: [
-      /(?:fasting\s+)?glucose[^\d]*([\d.,]+)\s*(?:mg[\s\/]*dL|mg)/i,
-      /blood\s+sugar[^\d]*([\d.,]+)\s*(?:mg[\s\/]*dL|mg)/i,
-      /fbs[^a-zA-Z]*([\d.,]+)\s*(?:mg[\s\/]*dL|mg)/i
-    ]
-  },
-  { 
-    id: 'totalCholesterol', 
-    name: 'Total Cholesterol', 
-    unit: 'mg/dL', 
-    category: 'Lipid',
-    patterns: [
-      /total\s+cholesterol[^\d]*([\d.,]+)\s*(?:mg[\s\/]*dL|mg)/i,
-      /cholesterol[^\d]*([\d.,]+)\s*(?:mg[\s\/]*dL|mg)/i
-    ]
-  },
-  { 
-    id: 'hdl', 
-    name: 'HDL Cholesterol', 
-    unit: 'mg/dL', 
-    category: 'Lipid',
-    patterns: [
-      /hdl\s*(?:cholesterol)?[^\d]*([\d.,]+)\s*(?:mg[\s\/]*dL|mg)/i,
-      /hdl[^a-zA-Z]*([\d.,]+)\s*(?:mg[\s\/]*dL|mg)/i,
-      /high[-\s]?density[^\d]*([\d.,]+)\s*(?:mg[\s\/]*dL|mg)/i
-    ]
-  },
-  { 
-    id: 'ldl', 
-    name: 'LDL Cholesterol', 
-    unit: 'mg/dL', 
-    category: 'Lipid',
-    patterns: [
-      /ldl\s*(?:cholesterol)?[^\d]*([\d.,]+)\s*(?:mg[\s\/]*dL|mg)/i,
-      /ldl[^a-zA-Z]*([\d.,]+)\s*(?:mg[\s\/]*dL|mg)/i,
-      /low[-\s]?density[^\d]*([\d.,]+)\s*(?:mg[\s\/]*dL|mg)/i
-    ]
-  },
-  { 
-    id: 'triglycerides', 
-    name: 'Triglycerides', 
-    unit: 'mg/dL', 
-    category: 'Lipid',
-    patterns: [
-      /triglycerides?[^\d]*([\d.,]+)\s*(?:mg[\s\/]*dL|mg)/i,
-      /tg[^a-zA-Z]*([\d.,]+)\s*(?:mg[\s\/]*dL|mg)/i
-    ]
-  },
-  { 
-    id: 'wbc', 
-    name: 'WBC Count', 
-    unit: '×10³/µL', 
-    category: 'Blood',
-    patterns: [
-      /wbc[^\d]*([\d.,]+)\s*(?:×10[³³]?[\/\\]?\s*[µu]L|10[³³]?[\/\\]?\s*[µu]L|\/\s*[µu]L|\s*thousand|cells?)/i,
-      /white\s+blood\s+cell[^\d]*([\d.,]+)/i,
-      /leukocyte[^\d]*([\d.,]+)/i
-    ]
-  },
-  { 
-    id: 'rbc', 
-    name: 'RBC Count', 
-    unit: '×10⁶/µL', 
-    category: 'Blood',
-    patterns: [
-      /rbc[^\d]*([\d.,]+)\s*(?:×10[⁶⁶]?[\/\\]?\s*[µu]L|10[⁶⁶]?[\/\\]?\s*[µu]L|\/\s*[µu]L|\s*million|cells?)/i,
-      /red\s+blood\s+cell[^\d]*([\d.,]+)/i,
-      /erythrocyte[^\d]*([\d.,]+)/i
-    ]
-  },
-  { 
-    id: 'platelets', 
-    name: 'Platelets', 
-    unit: '×10³/µL', 
-    category: 'Blood',
-    patterns: [
-      /platelet[^\d]*([\d.,]+)\s*(?:×10[³³]?[\/\\]?\s*[µu]L|10[³³]?[\/\\]?\s*[µu]L|\s*thousand|\s*lakhs?)/i,
-      /plt[^a-zA-Z]*([\d.,]+)\s*(?:×10[³³]?[\/\\]?\s*[µu]L|10[³³]?[\/\\]?\s*[µu]L|\/\s*[µu]L)/i,
-      /thrombocyte[^\d]*([\d.,]+)/i
-    ]
-  },
-  { 
-    id: 'creatinine', 
-    name: 'Creatinine', 
-    unit: 'mg/dL', 
-    category: 'Kidney',
-    patterns: [
-      /creatinine[^\d]*([\d.,]+)\s*(?:mg[\s\/]*dL|mg)/i,
-      /creat[^a-zA-Z]*([\d.,]+)\s*(?:mg[\s\/]*dL|mg)/i,
-      /s[.]?\s*creatinine[^\d]*([\d.,]+)/i
-    ]
-  },
-  { 
-    id: 'alt', 
-    name: 'ALT (SGPT)', 
-    unit: 'U/L', 
-    category: 'Liver',
-    patterns: [
-      /alt[^\d]*([\d.,]+)\s*(?:U[\s\/]?L|units?)/i,
-      /sgpt[^\d]*([\d.,]+)\s*(?:U[\s\/]?L|units?)/i,
-      /alanine[^\d]*([\d.,]+)/i
-    ]
-  },
-  { 
-    id: 'ast', 
-    name: 'AST (SGOT)', 
-    unit: 'U/L', 
-    category: 'Liver',
-    patterns: [
-      /ast[^\d]*([\d.,]+)\s*(?:U[\s\/]?L|units?)/i,
-      /sgot[^\d]*([\d.,]+)\s*(?:U[\s\/]?L|units?)/i,
-      /aspartate[^\d]*([\d.,]+)/i
-    ]
+// OCR.space API endpoint
+const OCR_SPACE_API_URL = 'https://api.ocr.space/parse/image';
+
+// Parse multipart form data manually for Vercel
+async function parseMultipartFormData(req) {
+  const contentType = req.headers['content-type'];
+  if (!contentType || !contentType.includes('multipart/form-data')) {
+    throw new Error('Invalid content type. Expected multipart/form-data');
   }
-];
 
-// Extract profile information
-function extractProfile(text) {
-  const profile = {};
+  const boundary = contentType.split('boundary=')[1];
+  if (!boundary) {
+    throw new Error('Boundary not found in content-type');
+  }
+
+  // Read raw body
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(chunk);
+  }
+  const buffer = Buffer.concat(chunks);
   
-  // Age extraction - improved patterns
+  console.log(`Total request size: ${buffer.length} bytes`);
+
+  // Find the file content
+  const boundaryBuffer = Buffer.from(`--${boundary}`);
+  const endBoundaryBuffer = Buffer.from(`--${boundary}--`);
+  
+  let parts = [];
+  let start = 0;
+  
+  while (true) {
+    const boundaryIndex = buffer.indexOf(boundaryBuffer, start);
+    if (boundaryIndex === -1) break;
+    
+    const nextBoundary = buffer.indexOf(boundaryBuffer, boundaryIndex + boundaryBuffer.length);
+    const endIndex = nextBoundary !== -1 ? nextBoundary : buffer.indexOf(endBoundaryBuffer, boundaryIndex);
+    
+    if (endIndex === -1) break;
+    
+    const part = buffer.slice(boundaryIndex + boundaryBuffer.length, endIndex);
+    parts.push(part);
+    start = endIndex;
+  }
+
+  console.log(`Found ${parts.length} parts`);
+  
+  let fileBuffer = null;
+  let fileName = null;
+  let fileType = null;
+
+  for (const part of parts) {
+    const headerEnd = part.indexOf('\r\n\r\n');
+    if (headerEnd === -1) continue;
+    
+    const header = part.slice(0, headerEnd).toString();
+    const content = part.slice(headerEnd + 4);
+    
+    // Remove trailing \r\n
+    const cleanContent = content.slice(0, content.length - 2);
+    
+    if (header.includes('filename=')) {
+      const nameMatch = header.match(/filename="([^"]+)"/);
+      fileName = nameMatch ? nameMatch[1] : 'unknown';
+      fileBuffer = cleanContent;
+      
+      // Detect file type from content
+      if (cleanContent.slice(0, 4).toString() === '%PDF') {
+        fileType = 'application/pdf';
+      } else if (cleanContent.slice(0, 8).toString().includes('PNG')) {
+        fileType = 'image/png';
+      } else if (cleanContent.slice(0, 3).toString() === 'GIF') {
+        fileType = 'image/gif';
+      } else if (cleanContent.slice(0, 2).toString() === 'BM') {
+        fileType = 'image/bmp';
+      } else if (cleanContent[0] === 0xFF && cleanContent[1] === 0xD8) {
+        fileType = 'image/jpeg';
+      } else {
+        fileType = 'application/octet-stream';
+      }
+      
+      console.log(`Found file: ${fileName}, type: ${fileType}, size: ${fileBuffer.length} bytes`);
+    }
+  }
+
+  if (!fileBuffer) {
+    throw new Error('No file found in request');
+  }
+
+  return { fileBuffer, fileName, fileType };
+}
+
+// Use OCR.space API for better text extraction
+async function extractWithOCRSpace(fileBuffer, fileType) {
+  console.log('Using OCR.space API for extraction...');
+  
+  try {
+    // Convert buffer to base64
+    const base64Image = fileBuffer.toString('base64');
+    
+    // Determine if it's PDF or image
+    const isPdf = fileType === 'application/pdf';
+    
+    // Build form data
+    const formData = new URLSearchParams();
+    formData.append('base64Image', `data:${isPdf ? 'application/pdf' : 'image/jpeg'};base64,${base64Image}`);
+    formData.append('language', 'eng');
+    formData.append('isCreateSearchablePdf', 'false');
+    formData.append('isSearchablePdfHideTextLayer', 'false');
+    formData.append('scale', 'true');
+    formData.append('detectOrientation', 'true');
+    formData.append('OCREngine', '2'); // Engine 2 is better for tables
+    
+    console.log('Sending request to OCR.space API...');
+    
+    const response = await fetch(OCR_SPACE_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: formData.toString(),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`OCR.space API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log('OCR.space response:', JSON.stringify(data, null, 2));
+    
+    if (data.IsErroredOnProcessing) {
+      throw new Error(`OCR Error: ${data.ErrorMessage || 'Unknown error'}`);
+    }
+    
+    if (!data.ParsedResults || data.ParsedResults.length === 0) {
+      throw new Error('No text found in document');
+    }
+    
+    // Combine all parsed results
+    let extractedText = '';
+    for (const result of data.ParsedResults) {
+      extractedText += result.ParsedText + '\n';
+    }
+    
+    console.log('OCR.space extracted text length:', extractedText.length);
+    return extractedText;
+    
+  } catch (error) {
+    console.error('OCR.space API error:', error);
+    throw error;
+  }
+}
+
+// Fallback to local PDF parsing
+async function extractWithLocalPDF(fileBuffer) {
+  console.log('Using local PDF parsing...');
+  
+  // Write to temp file
+  const tempDir = os.tmpdir();
+  const tempFile = path.join(tempDir, `upload-${Date.now()}.pdf`);
+  
+  try {
+    fs.writeFileSync(tempFile, fileBuffer);
+    console.log(`Saved PDF to ${tempFile}`);
+    
+    const dataBuffer = fs.readFileSync(tempFile);
+    const pdfData = await pdfParse(dataBuffer);
+    
+    console.log('PDF parsed successfully, text length:', pdfData.text.length);
+    return pdfData.text;
+    
+  } catch (error) {
+    console.error('PDF parsing error:', error);
+    throw error;
+    
+  } finally {
+    // Clean up
+    try {
+      if (fs.existsSync(tempFile)) {
+        fs.unlinkSync(tempFile);
+        console.log(`Cleaned up ${tempFile}`);
+      }
+    } catch (e) {
+      console.error('Cleanup error:', e);
+    }
+  }
+}
+
+// Enhanced biomarker extraction with multiple strategies
+function extractBiomarkersFromText(text) {
+  console.log('\n=== Starting biomarker extraction ===');
+  console.log('Text preview:', text.substring(0, 500));
+  
+  const biomarkers = [];
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  
+  // Define biomarker patterns with flexible matching
+  const patterns = [
+    // Hemoglobin variations
+    {
+      id: 'hemoglobin',
+      names: ['hemoglobin', 'hb', 'hgb', 'haemoglobin'],
+      unit: 'g/dL',
+      category: 'Blood',
+      patterns: [
+        /hemoglobin[\s:)*]*(\d+\.?\d*)\s*(g\/dL|gm\/dL|g%|g\/dl)/i,
+        /hb[\s:)*]*(\d+\.?\d*)\s*(g\/dL|gm\/dL|g%|g\/dl)/i,
+        /(\d+\.?\d*)\s*(g\/dL|gm\/dL|g%|g\/dl).*hemoglobin/i,
+      ]
+    },
+    // Glucose variations
+    {
+      id: 'glucose',
+      names: ['glucose', 'sugar', 'fasting glucose', 'blood sugar'],
+      unit: 'mg/dL',
+      category: 'Metabolic',
+      patterns: [
+        /glucose[\s:fasting)*]*(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%)/i,
+        /sugar[\s:fastingblood)*]*(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%)/i,
+        /(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%).*glucose/i,
+      ]
+    },
+    // Total Cholesterol
+    {
+      id: 'total_cholesterol',
+      names: ['total cholesterol', 'cholesterol total', 'cholesterol'],
+      unit: 'mg/dL',
+      category: 'Lipid',
+      patterns: [
+        /total[\s]*cholesterol[\s:)*]*(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%)/i,
+        /cholesterol[\s:)*]*(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%)/i,
+        /(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%).*cholesterol/i,
+      ]
+    },
+    // HDL
+    {
+      id: 'hdl',
+      names: ['hdl', 'hdl cholesterol', 'good cholesterol'],
+      unit: 'mg/dL',
+      category: 'Lipid',
+      patterns: [
+        /hdl[\s:)*]*(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%)/i,
+        /(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%).*hdl/i,
+      ]
+    },
+    // LDL
+    {
+      id: 'ldl',
+      names: ['ldl', 'ldl cholesterol', 'bad cholesterol'],
+      unit: 'mg/dL',
+      category: 'Lipid',
+      patterns: [
+        /ldl[\s:)*]*(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%)/i,
+        /(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%).*ldl/i,
+      ]
+    },
+    // Triglycerides
+    {
+      id: 'triglycerides',
+      names: ['triglycerides', 'triglyceride'],
+      unit: 'mg/dL',
+      category: 'Lipid',
+      patterns: [
+        /triglycerides?[\s:)*]*(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%)/i,
+        /(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%).*triglycerides?/i,
+      ]
+    },
+    // WBC
+    {
+      id: 'wbc',
+      names: ['wbc', 'white blood cell', 'leukocyte', 'total leucocyte count'],
+      unit: '×10³/µL',
+      category: 'Blood',
+      patterns: [
+        /wbc[\s:)*]*(\d+\.?\d*)\s*(10\^3|x10\^3|×10³|\/µL|\/ul)/i,
+        /white[\s]*blood[\s]*cell[\s:)*]*(\d+\.?\d*)/i,
+        /leucocyte[\s:)*]*(\d+\.?\d*)/i,
+        /tlc[\s:)*]*(\d+\.?\d*)/i,
+      ]
+    },
+    // RBC
+    {
+      id: 'rbc',
+      names: ['rbc', 'red blood cell', 'erythrocyte'],
+      unit: '×10⁶/µL',
+      category: 'Blood',
+      patterns: [
+        /rbc[\s:)*]*(\d+\.?\d*)\s*(10\^6|x10\^6|×10⁶|\/µL|\/ul)/i,
+        /red[\s]*blood[\s]*cell[\s:)*]*(\d+\.?\d*)/i,
+        /erythrocyte[\s:)*]*(\d+\.?\d*)/i,
+      ]
+    },
+    // Platelets
+    {
+      id: 'platelets',
+      names: ['platelet', 'platelets', 'plt', 'thrombocyte'],
+      unit: '×10³/µL',
+      category: 'Blood',
+      patterns: [
+        /platelets?[\s:)*]*(\d+\.?\d*)\s*(10\^3|x10\^3|×10³|\/µL|\/ul)/i,
+        /plt[\s:)*]*(\d+\.?\d*)/i,
+      ]
+    },
+    // Creatinine
+    {
+      id: 'creatinine',
+      names: ['creatinine', 'creat', 's creatinine'],
+      unit: 'mg/dL',
+      category: 'Kidney',
+      patterns: [
+        /creatinine[\s:)*]*(\d+\.?\d*)\s*(mg\/dL|mg\/dl)/i,
+        /s\.?\s*creatinine[\s:)*]*(\d+\.?\d*)/i,
+      ]
+    },
+    // ALT
+    {
+      id: 'alt',
+      names: ['alt', 'alanine aminotransferase', 'sgpt'],
+      unit: 'U/L',
+      category: 'Liver',
+      patterns: [
+        /alt[\s:)*]*(\d+\.?\d*)\s*(U\/L|u\/l|IU\/L)/i,
+        /sgpt[\s:)*]*(\d+\.?\d*)/i,
+      ]
+    },
+    // AST
+    {
+      id: 'ast',
+      names: ['ast', 'aspartate aminotransferase', 'sgot'],
+      unit: 'U/L',
+      category: 'Liver',
+      patterns: [
+        /ast[\s:)*]*(\d+\.?\d*)\s*(U\/L|u\/l|IU\/L)/i,
+        /sgot[\s:)*]*(\d+\.?\d*)/i,
+      ]
+    },
+  ];
+  
+  // Method 1: Table format parsing (lines with 3+ columns separated by | or spaces)
+  console.log('\n--- Trying table format parsing ---');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // Skip short lines
+    if (line.length < 10) continue;
+    
+    // Try to match each biomarker pattern
+    for (const pattern of patterns) {
+      // Check if this line contains the biomarker name
+      const hasName = pattern.names.some(name => 
+        line.toLowerCase().includes(name.toLowerCase())
+      );
+      
+      if (hasName) {
+        console.log(`Found potential biomarker in line: "${line}"`);
+        
+        // Try all regex patterns for this biomarker
+        for (const regex of pattern.patterns) {
+          const match = line.match(regex);
+          if (match) {
+            let value = parseFloat(match[1]);
+            
+            // Validate value is reasonable
+            if (value > 0 && value < 10000) {
+              biomarkers.push({
+                id: pattern.id,
+                name: pattern.names[0].charAt(0).toUpperCase() + pattern.names[0].slice(1),
+                value: value,
+                unit: pattern.unit,
+                category: pattern.category
+              });
+              console.log(`✓ Extracted: ${pattern.id} = ${value} ${pattern.unit}`);
+              break; // Found this biomarker, move to next
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  // Method 2: Look for values in nearby lines
+  console.log('\n--- Trying line-by-line extraction ---');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].toLowerCase();
+    
+    for (const pattern of patterns) {
+      // Skip if already found
+      if (biomarkers.find(b => b.id === pattern.id)) continue;
+      
+      const hasName = pattern.names.some(name => line.includes(name.toLowerCase()));
+      
+      if (hasName) {
+        // Look for number in this line or next 2 lines
+        for (let j = i; j < Math.min(i + 3, lines.length); j++) {
+          const searchLine = lines[j];
+          const numberMatch = searchLine.match(/(\d+\.?\d*)/);
+          
+          if (numberMatch) {
+            const value = parseFloat(numberMatch[1]);
+            
+            // Basic validation
+            if (value > 0 && value < 10000 && !biomarkers.find(b => b.id === pattern.id)) {
+              biomarkers.push({
+                id: pattern.id,
+                name: pattern.names[0].charAt(0).toUpperCase() + pattern.names[0].slice(1),
+                value: value,
+                unit: pattern.unit,
+                category: pattern.category
+              });
+              console.log(`✓ Extracted (nearby): ${pattern.id} = ${value} ${pattern.unit}`);
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  // Deduplicate
+  const uniqueBiomarkers = [];
+  const seen = new Set();
+  for (const b of biomarkers) {
+    if (!seen.has(b.id)) {
+      seen.add(b.id);
+      uniqueBiomarkers.push(b);
+    }
+  }
+  
+  console.log(`\n=== Extraction complete: ${uniqueBiomarkers.length} biomarkers found ===`);
+  return uniqueBiomarkers;
+}
+
+// Extract patient info from text
+function extractPatientInfo(text) {
+  const info = { age: null, gender: null, region: null };
+  
+  console.log('\n=== Extracting patient info ===');
+  
+  // Age patterns
   const agePatterns = [
-    /age\s*[\/\s]\s*gender[^\d]*([\d]+)\s*(?:years?|yrs?|y)/i,
-    /age\s*[:\-]?\s*([\d]+)\s*(?:years?|yrs?|y)?/i,
-    /([\d]+)\s*(?:years?|yrs?)\s*(?:old|of age)/i,
-    /age\/sex[^\d]*([\d]+)/i,
-    /aged?\s*[:\-]?\s*([\d]+)\s*(?:years?|yrs?)?/i
+    /age\s*[:\/\s]*\s*(\d+)\s*(years?|yrs?|y)?/i,
+    /(\d+)\s*(years?|yrs?|y)\s*(old)?/i,
+    /age\s*[:\/\s]*\s*(\d+)/i,
+    /(\d+)\s*y\/o/i,
   ];
   
   for (const pattern of agePatterns) {
     const match = text.match(pattern);
     if (match) {
-      profile.age = parseInt(match[1]);
+      info.age = parseInt(match[1]);
+      console.log('✓ Found age:', info.age);
       break;
     }
   }
   
-  // Gender extraction - improved patterns
+  // Gender patterns
   const genderPatterns = [
-    /gender\s*[\/\s]\s*[^\/]*\/\s*(female|male|f|m)/i,
-    /gender\s*[:\-]?\s*(female|male|f|m)/i,
-    /sex\s*[:\-]?\s*(female|male|f|m)/i,
-    /\/(female|male|f|m)\//i,
-    /(female|male)\s*(?:patient|subject)/i,
-    /\b(female|male)\b/i
+    { pattern: /\bmale\b/i, value: 'male' },
+    { pattern: /\bfemale\b/i, value: 'female' },
+    { pattern: /gender\s*[:\/\s]*\s*(male|female)/i, value: null },
+    { pattern: /sex\s*[:\/\s]*\s*(male|female)/i, value: null },
+    { pattern: /\bmrs?\.?\b/i, value: 'male' },
+    { pattern: /\bmiss\b/i, value: 'female' },
+    { pattern: /\bms\.?\b/i, value: 'female' },
+    { pattern: /\bmrs\.?\b/i, value: 'female' },
+    { pattern: /male\s*\/\s*female/i, value: null },
   ];
   
-  for (const pattern of genderPatterns) {
+  for (const { pattern, value } of genderPatterns) {
     const match = text.match(pattern);
     if (match) {
-      const g = match[1].toLowerCase();
-      if (g === 'f' || g === 'female') profile.gender = 'female';
-      else if (g === 'm' || g === 'male') profile.gender = 'male';
-      if (profile.gender) break;
-    }
-  }
-  
-  // Title-based detection as fallback
-  if (!profile.gender) {
-    if (text.match(/\bmrs\b|\bms\b|\bmiss\b/i)) {
-      profile.gender = 'female';
-    } else if (text.match(/\bmr\b(?!s)/i)) {
-      profile.gender = 'male';
-    }
-  }
-  
-  return profile;
-}
-
-// Extract biomarkers from table format (common in Indian lab reports)
-function extractFromTable(lines) {
-  const biomarkers = [];
-  const foundIds = new Set();
-  
-  for (const line of lines) {
-    const upperLine = line.toUpperCase();
-    
-    for (const config of BIOMARKER_CONFIG) {
-      if (foundIds.has(config.id)) continue;
-      
-      // Check if this line contains the biomarker name
-      const nameMatch = config.patterns.some(p => {
-        const patternStr = p.source;
-        // Extract the biomarker name part from the regex
-        const namePart = patternStr.split('[')[0].replace(/\\/g, '').replace(/\?/g, '').toUpperCase();
-        return upperLine.includes(namePart.replace(/[^A-Z]/g, '')) ||
-               upperLine.includes(config.name.toUpperCase().replace(/\s+/g, '')) ||
-               upperLine.includes(config.name.split(' ')[0].toUpperCase());
-      });
-      
-      if (!nameMatch) continue;
-      
-      // Look for numbers in this line - try different positions
-      // Pattern: Name | Unit | Value or Name | Value | Unit or Name Value Unit
-      const parts = line.split(/[|\t,;]+/).map(p => p.trim()).filter(p => p);
-      
-      for (const part of parts) {
-        // Try to find a number
-        const numMatch = part.match(/([\d.,]+)/);
-        if (numMatch) {
-          const valueStr = numMatch[1].replace(',', '.');
-          const value = parseFloat(valueStr);
-          
-          if (!isNaN(value) && value > 0 && value < 10000) {
-            // Validate it's not a reference range value
-            if (part.match(/reference|range|normal|ref[.]?\s*interval/i)) {
-              continue;
-            }
-            
-            biomarkers.push({
-              id: config.id,
-              name: config.name,
-              value: value,
-              unit: config.unit,
-              category: config.category
-            });
-            foundIds.add(config.id);
-            console.log(`Table extraction: ${config.name} = ${value} ${config.unit}`);
-            break;
-          }
-        }
+      if (value) {
+        info.gender = value;
+      } else if (match[1]) {
+        info.gender = match[1].toLowerCase();
       }
-      
-      if (foundIds.has(config.id)) break;
+      console.log('✓ Found gender:', info.gender);
+      break;
     }
   }
   
-  return biomarkers;
+  return info;
 }
 
-// Extract biomarkers using regex patterns
-function extractWithPatterns(text) {
-  const biomarkers = [];
-  const foundIds = new Set();
-  
-  // Normalize text for better matching
-  const normalizedText = text
-    .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .replace(/=/g, ' ')
-    .replace(/:/g, ' ');
-  
-  for (const config of BIOMARKER_CONFIG) {
-    if (foundIds.has(config.id)) continue;
-    
-    for (const pattern of config.patterns) {
-      const match = normalizedText.match(pattern);
-      if (match && match[1]) {
-        const valueStr = match[1].replace(',', '.');
-        const value = parseFloat(valueStr);
-        
-        if (!isNaN(value) && value > 0 && value < 10000) {
-          biomarkers.push({
-            id: config.id,
-            name: config.name,
-            value: value,
-            unit: config.unit,
-            category: config.category
-          });
-          foundIds.add(config.id);
-          console.log(`Pattern extraction: ${config.name} = ${value} ${config.unit}`);
-          break;
-        }
-      }
-    }
-  }
-  
-  return biomarkers;
-}
-
-// Line-by-line extraction with proximity matching
-function extractLineByLine(lines) {
-  const biomarkers = [];
-  const foundIds = new Set();
-  
-  // Create a map of biomarker keywords
-  const keywordMap = {};
-  for (const config of BIOMARKER_CONFIG) {
-    const keywords = [config.name.toLowerCase()];
-    if (config.id === 'hemoglobin') keywords.push('hb', 'hgb');
-    if (config.id === 'glucose') keywords.push('sugar', 'fbs');
-    if (config.id === 'wbc') keywords.push('wbc', 'white blood');
-    if (config.id === 'rbc') keywords.push('rbc', 'red blood');
-    if (config.id === 'alt') keywords.push('alt', 'sgpt');
-    if (config.id === 'ast') keywords.push('ast', 'sgot');
-    if (config.id === 'hdl') keywords.push('hdl');
-    if (config.id === 'ldl') keywords.push('ldl');
-    if (config.id === 'platelets') keywords.push('platelet', 'plt');
-    if (config.id === 'creatinine') keywords.push('creatinine', 'creat');
-    if (config.id === 'triglycerides') keywords.push('triglyceride', 'tg');
-    
-    keywordMap[config.id] = { keywords, config };
-  }
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].toLowerCase();
-    
-    for (const [id, { keywords, config }] of Object.entries(keywordMap)) {
-      if (foundIds.has(id)) continue;
-      
-      // Check if any keyword is in this line
-      const hasKeyword = keywords.some(kw => line.includes(kw.toLowerCase()));
-      if (!hasKeyword) continue;
-      
-      // Look for numbers in current line and nearby lines
-      const searchLines = [
-        lines[i],
-        lines[i + 1] || '',
-        lines[i - 1] || ''
-      ];
-      
-      for (const searchLine of searchLines) {
-        if (!searchLine) continue;
-        
-        // Find all numbers in the line
-        const numMatches = searchLine.match(/([\d.,]+)/g);
-        if (!numMatches) continue;
-        
-        for (const numStr of numMatches) {
-          const valueStr = numStr.replace(',', '.');
-          const value = parseFloat(valueStr);
-          
-          // Skip if it's likely a reference range or invalid
-          if (isNaN(value) || value <= 0 || value >= 10000) continue;
-          
-          // Check context - avoid reference ranges
-          const context = searchLine.toLowerCase();
-          if (context.includes('reference') || context.includes('range') || 
-              context.includes('normal') || context.includes('interval')) {
-            continue;
-          }
-          
-          biomarkers.push({
-            id: config.id,
-            name: config.name,
-            value: value,
-            unit: config.unit,
-            category: config.category
-          });
-          foundIds.add(id);
-          console.log(`Line extraction: ${config.name} = ${value} ${config.unit}`);
-          break;
-        }
-        
-        if (foundIds.has(id)) break;
-      }
-    }
-  }
-  
-  return biomarkers;
-}
-
-// Main extraction function combining all methods
-function extractBiomarkers(text) {
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-  console.log(`Processing ${lines.length} lines of text`);
-  
-  // Try multiple extraction methods
-  const method1 = extractFromTable(lines);
-  console.log(`Table extraction found: ${method1.length} biomarkers`);
-  
-  const method2 = extractWithPatterns(text);
-  console.log(`Pattern extraction found: ${method2.length} biomarkers`);
-  
-  const method3 = extractLineByLine(lines);
-  console.log(`Line-by-line extraction found: ${method3.length} biomarkers`);
-  
-  // Merge results, preferring method1 (table), then method2 (patterns), then method3
-  const allResults = [...method1, ...method2, ...method3];
-  const merged = {};
-  
-  for (const b of allResults) {
-    if (!merged[b.id]) {
-      merged[b.id] = b;
-    }
-  }
-  
-  return Object.values(merged);
-}
-
-// Clean up extracted text for debugging
-function cleanText(text) {
-  return text
-    .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
+// Main handler
 module.exports = async (req, res) => {
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -422,150 +504,68 @@ module.exports = async (req, res) => {
   }
   
   try {
-    // Parse multipart form data manually
-    const chunks = [];
-    for await (const chunk of req) {
-      chunks.push(chunk);
-    }
-    const buffer = Buffer.concat(chunks);
+    console.log('\n========================================');
+    console.log('Starting extraction request...');
+    console.log('========================================\n');
     
-    console.log('Received buffer size:', buffer.length);
+    // Parse multipart form data
+    const { fileBuffer, fileName, fileType } = await parseMultipartFormData(req);
     
-    // Find the content-type header to get boundary
-    const contentType = req.headers['content-type'] || '';
-    const boundaryMatch = contentType.match(/boundary=([^;]+)/);
+    console.log(`Processing file: ${fileName} (${fileType})`);
     
-    if (!boundaryMatch) {
-      console.log('No boundary found in content-type:', contentType);
-      return res.status(400).json({ 
-        error: 'Invalid content type - must be multipart/form-data',
-        received: contentType
-      });
-    }
+    // Extract text based on file type
+    let extractedText = '';
     
-    const boundary = boundaryMatch[1].trim();
-    console.log('Boundary:', boundary);
-    
-    // Find file content in the multipart body
-    const boundaryBuffer = Buffer.from('--' + boundary);
-    let fileBuffer = null;
-    let fileType = '';
-    
-    // Find the file part
-    let startIdx = buffer.indexOf(boundaryBuffer);
-    while (startIdx !== -1) {
-      const nextBoundaryIdx = buffer.indexOf(boundaryBuffer, startIdx + boundaryBuffer.length);
-      const part = buffer.slice(startIdx, nextBoundaryIdx === -1 ? undefined : nextBoundaryIdx);
-      
-      // Check if this part contains a file
-      const contentDispositionIdx = part.indexOf('Content-Disposition:');
-      if (contentDispositionIdx !== -1) {
-        const dispositionStr = part.slice(contentDispositionIdx, part.indexOf('\r\n', contentDispositionIdx)).toString();
-        if (dispositionStr.includes('filename=')) {
-          // This is the file part - extract the file content
-          const headerEndIdx = part.indexOf('\r\n\r\n');
-          if (headerEndIdx !== -1) {
-            fileBuffer = part.slice(headerEndIdx + 4);
-            // Remove trailing \r\n before boundary
-            while (fileBuffer.length > 0 && 
-                   (fileBuffer[fileBuffer.length - 1] === 0x0D || 
-                    fileBuffer[fileBuffer.length - 1] === 0x0A)) {
-              fileBuffer = fileBuffer.slice(0, -1);
-            }
-            
-            // Detect file type
-            if (dispositionStr.toLowerCase().includes('.pdf')) {
-              fileType = 'pdf';
-            } else if (dispositionStr.match(/\.(jpg|jpeg|png|gif|bmp|webp)/i)) {
-              fileType = 'image';
-            }
-            
-            console.log('Found file part, size:', fileBuffer.length, 'type:', fileType);
-            break;
-          }
-        }
-      }
-      
-      startIdx = nextBoundaryIdx;
-    }
-    
-    if (!fileBuffer || fileBuffer.length === 0) {
-      console.log('No file content found in multipart data');
-      return res.status(400).json({ error: 'No file uploaded or file is empty' });
-    }
-    
-    // Validate file type by magic bytes
-    const isPDF = fileBuffer.slice(0, 4).toString() === '%PDF';
-    const isImage = fileBuffer.slice(0, 2).toString('hex') === 'ffd8' || // JPEG
-                    fileBuffer.slice(0, 4).toString('hex') === '89504e47' || // PNG
-                    fileBuffer.slice(0, 3).toString('hex') === '474946'; // GIF
-    
-    console.log('File validation - isPDF:', isPDF, 'isImage:', isImage);
-    
-    let text = '';
-    let biomarkers = [];
-    let extractedInfo = {};
-    
-    if (isPDF || fileType === 'pdf') {
-      // Process PDF
-      console.log('Processing PDF file...');
+    if (fileType === 'application/pdf') {
+      // Try OCR.space first, fallback to local
       try {
-        const pdfData = await pdfParse(fileBuffer);
-        text = pdfData.text || '';
-        console.log('PDF text extracted, length:', text.length);
-        console.log('PDF text preview (first 1000 chars):', text.substring(0, 1000));
-      } catch (pdfError) {
-        console.error('PDF parsing error:', pdfError);
-        return res.status(400).json({ 
-          error: 'Failed to parse PDF: ' + pdfError.message,
-          extractedText: ''
-        });
+        extractedText = await extractWithOCRSpace(fileBuffer, fileType);
+      } catch (ocrError) {
+        console.log('OCR.space failed, falling back to local PDF parser:', ocrError.message);
+        extractedText = await extractWithLocalPDF(fileBuffer);
       }
-    } else if (isImage || fileType === 'image') {
-      // For images, return helpful error since OCR is complex
-      return res.status(400).json({
-        error: 'Image processing requires OCR setup. Please enter biomarker values manually.',
-        extractedText: '[Image file uploaded - OCR not configured]'
-      });
+    } else if (fileType.startsWith('image/')) {
+      // Use OCR.space for images
+      extractedText = await extractWithOCRSpace(fileBuffer, fileType);
     } else {
-      // Try to extract text anyway
-      text = fileBuffer.toString('utf-8');
-      console.log('Treating as text file, length:', text.length);
+      throw new Error('Unsupported file type. Please upload a PDF or image file.');
     }
     
-    if (!text || text.trim().length === 0) {
-      return res.status(400).json({
-        error: 'Could not extract text from the uploaded file. The file may be scanned/image-based or corrupted.',
-        extractedText: ''
-      });
+    if (!extractedText || extractedText.trim().length === 0) {
+      throw new Error('No text could be extracted from the file. The file may be scanned or image-based.');
     }
     
-    // Clean and log the extracted text
-    const cleanedText = cleanText(text);
-    console.log('Cleaned text preview (first 1000 chars):', cleanedText.substring(0, 1000));
+    console.log(`\nExtracted ${extractedText.length} characters of text`);
     
-    // Extract profile information
-    extractedInfo = extractProfile(cleanedText);
-    console.log('Extracted profile:', extractedInfo);
+    // Extract patient info
+    const profile = extractPatientInfo(extractedText);
     
-    // Extract biomarkers using all methods
-    biomarkers = extractBiomarkers(cleanedText);
-    console.log('Final extracted biomarkers:', biomarkers);
+    // Extract biomarkers
+    const biomarkers = extractBiomarkersFromText(extractedText);
     
-    return res.json({
-      success: true,
+    // Prepare response
+    const response = {
+      success: biomarkers.length > 0,
       biomarkers: biomarkers,
-      biomarkersFound: biomarkers.length,
-      extractedInfo: extractedInfo,
-      extractedText: cleanedText.substring(0, 2000) // Return first 2000 chars for debugging
-    });
+      profile: profile,
+      extractedText: biomarkers.length === 0 ? extractedText.substring(0, 2000) : undefined,
+      message: biomarkers.length > 0 
+        ? `Successfully extracted ${biomarkers.length} biomarkers` 
+        : 'No biomarkers found in the file. Please enter values manually.',
+    };
+    
+    console.log('\n========================================');
+    console.log('Extraction response:', JSON.stringify(response, null, 2));
+    console.log('========================================\n');
+    
+    res.status(200).json(response);
     
   } catch (error) {
     console.error('Extraction error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Internal server error: ' + error.message,
-      extractedText: ''
+    res.status(500).json({ 
+      error: 'Extraction failed', 
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };
