@@ -1,17 +1,10 @@
 {
   "version": 2,
-  "routes": [
-    {
-      "src": "/api/extract",
-      "dest": "/api/extract.js",
-      "methods": ["POST", "OPTIONS"],
-      "bodyParser": false
-    },
-    { "src": "/api/analyze", "dest": "/api/analyze.js" },
-    { "src": "/api/biomarkers", "dest": "/api/biomarkers.js" },
-    { "src": "/api/(.*)", "dest": "/api/$1" },
-    { "src": "/(.*)", "dest": "/public/$1" }
-  ],
+  "framework": null,
+  "buildCommand": "npm install",
+  "installCommand": "npm install",
+  "devCommand": "node server.js",
+  "outputDirectory": "public",
   "headers": [
     {
       "source": "/api/(.*)",
@@ -23,9 +16,15 @@
     }
   ],
   "functions": {
-    "api/extract.js": {
-      "maxDuration": 30,
+    "api/*.js": {
+      "maxDuration": 60,
       "memory": 1024
     }
-  }
+  },
+  "routes": [
+    { "src": "/api/extract", "dest": "/api/extract.js" },
+    { "src": "/api/analyze", "dest": "/api/analyze.js" },
+    { "src": "/api/biomarkers", "dest": "/api/biomarkers.js" },
+    { "src": "/(.*)", "dest": "/public/$1" }
+  ]
 }

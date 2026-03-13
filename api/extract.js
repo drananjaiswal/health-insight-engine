@@ -1,194 +1,51 @@
-// API Endpoint: POST /api/extract
-// Extracts biomarker data from uploaded PDF or image files
-// Optimized for Vercel Serverless Functions
-
+// API endpoint for extracting biomarkers from uploaded PDFs and images
 const pdfParse = require('pdf-parse');
+const { createWorker } = require('tesseract.js');
 
-// Biomarker patterns for extraction - comprehensive regex patterns
-const BIOMARKER_PATTERNS = {
-  hemoglobin: {
-    patterns: [
-      /hemoglobin[:\s]+(\d+\.?\d*)\s*(g\/dL|g dl|g\/L)/i,
-      /hemoglobin\s*\(?\s*hb\s*\)?[:\s]+(\d+\.?\d*)/i,
-      /\bhgb?\b[:\s]+(\d+\.?\d*)/i,
-      /hemoglobin.*?result[:\s]+(\d+\.?\d*)/i
-    ],
-    id: 'hemoglobin',
-    name: 'Hemoglobin',
-    unit: 'g/dL'
-  },
-  glucose: {
-    patterns: [
-      /glucose\s*(?:\(fasting\)|fasting)?[:\s]+(\d+)\s*(mg\/dL|mg dl)/i,
-      /blood\s+sugar[:\s]+(\d+)\s*(mg\/dL|mg dl)/i,
-      /glucose.*?result[:\s]+(\d+)/i
-    ],
-    id: 'glucose',
-    name: 'Glucose (Fasting)',
-    unit: 'mg/dL'
-  },
-  cholesterol_total: {
-    patterns: [
-      /total\s+cholesterol[:\s]+(\d+)\s*(mg\/dL|mg dl)/i,
-      /cholesterol[,\s]*total[:\s]+(\d+)/i,
-      /cholesterol[:\s]+(\d+)\s*(?:mg\/dL|mg dl).*total/i
-    ],
-    id: 'cholesterol_total',
-    name: 'Total Cholesterol',
-    unit: 'mg/dL'
-  },
-  hdl: {
-    patterns: [
-      /hdl[:\s]+(\d+)\s*(mg\/dL|mg dl)/i,
-      /hdl\s*cholesterol[:\s]+(\d+)/i,
-      /high[\s-]*density[:\s]+(\d+)/i
-    ],
-    id: 'hdl',
-    name: 'HDL Cholesterol',
-    unit: 'mg/dL'
-  },
-  ldl: {
-    patterns: [
-      /ldl[:\s]+(\d+)\s*(mg\/dL|mg dl)/i,
-      /ldl\s*cholesterol[:\s]+(\d+)/i,
-      /low[\s-]*density[:\s]+(\d+)/i
-    ],
-    id: 'ldl',
-    name: 'LDL Cholesterol',
-    unit: 'mg/dL'
-  },
-  triglycerides: {
-    patterns: [
-      /triglycerides?[:\s]+(\d+)\s*(mg\/dL|mg dl)/i
-    ],
-    id: 'triglycerides',
-    name: 'Triglycerides',
-    unit: 'mg/dL'
-  },
-  wbc: {
-    patterns: [
-      /wbc[:\s]+(\d+\.?\d*)\s*(K\/?μ?L|thousand|x10\^3)/i,
-      /white\s*blood\s*(?:cell|count)[:\s]+(\d+\.?\d*)/i,
-      /leukocytes?[:\s]+(\d+\.?\d*)/i
-    ],
-    id: 'wbc',
-    name: 'White Blood Cells',
-    unit: 'K/μL'
-  },
-  rbc: {
-    patterns: [
-      /rbc[:\s]+(\d+\.?\d*)\s*(M\/?μ?L|million|x10\^6)/i,
-      /red\s*blood\s*(?:cell|count)[:\s]+(\d+\.?\d*)/i,
-      /erythrocytes?[:\s]+(\d+\.?\d*)/i
-    ],
-    id: 'rbc',
-    name: 'Red Blood Cells',
-    unit: 'M/μL'
-  },
-  platelets: {
-    patterns: [
-      /platelets?[:\s]+(\d+)\s*(K\/?μ?L|thousand)/i,
-      /plt[:\s]+(\d+)/i,
-      /thrombocytes?[:\s]+(\d+)/i
-    ],
-    id: 'platelets',
-    name: 'Platelet Count',
-    unit: 'K/μL'
-  },
-  creatinine: {
-    patterns: [
-      /creatinine[:\s]+(\d+\.?\d*)\s*(mg\/dL|mg dl)/i
-    ],
-    id: 'creatinine',
-    name: 'Creatinine',
-    unit: 'mg/dL'
-  },
-  alt: {
-    patterns: [
-      /alt[:\s]+(\d+)\s*(U\/L|u\/l|units)/i,
-      /alanine\s*aminotransferase[:\s]+(\d+)/i,
-      /sgpt[:\s]+(\d+)/i
-    ],
-    id: 'alt',
-    name: 'ALT (SGPT)',
-    unit: 'U/L'
-  },
-  ast: {
-    patterns: [
-      /ast[:\s]+(\d+)\s*(U\/L|u\/l|units)/i,
-      /aspartate\s*aminotransferase[:\s]+(\d+)/i,
-      /sgot[:\s]+(\d+)/i
-    ],
-    id: 'ast',
-    name: 'AST (SGOT)',
-    unit: 'U/L'
-  }
-};
-
-// Extract biomarkers from text using pattern matching
-function extractBiomarkersFromText(text) {
-  const extracted = [];
-  const foundMarkers = new Set();
+// Parse multipart form data manually for Vercel serverless
+function parseMultipartForm(buffer, contentType) {
+  const boundary = contentType.split('boundary=')[1];
+  if (!boundary) throw new Error('No boundary in content-type');
   
-  for (const [key, config] of Object.entries(BIOMARKER_PATTERNS)) {
-    for (const pattern of config.patterns) {
-      const match = text.match(pattern);
-      if (match) {
-        const value = parseFloat(match[1]);
-        if (!isNaN(value) && !foundMarkers.has(config.id)) {
-          extracted.push({
-            id: config.id,
-            name: config.name,
-            value: value,
-            unit: config.unit,
-            confidence: 'high'
-          });
-          foundMarkers.add(config.id);
-          break; // Only take first match per marker
-        }
-      }
-    }
-  }
-  
-  return extracted;
-}
-
-// Clean up extracted text
-function cleanText(text) {
-  if (!text) return '';
-  return text
-    .replace(/\s+/g, ' ')
-    .replace(/[^\x20-\x7E\n\r]/g, ' ') // Replace non-printable with space
-    .trim();
-}
-
-// Parse multipart form data manually for Vercel compatibility
-function parseMultipartFormData(buffer, boundary) {
-  const parts = [];
   const boundaryBuffer = Buffer.from(`--${boundary}`);
+  const parts = [];
   let start = buffer.indexOf(boundaryBuffer);
   
   while (start !== -1) {
     let end = buffer.indexOf(boundaryBuffer, start + boundaryBuffer.length);
     if (end === -1) break;
     
-    const part = buffer.slice(start + boundaryBuffer.length, end);
-    const headerEnd = part.indexOf('\r\n\r\n');
+    let part = buffer.slice(start + boundaryBuffer.length, end);
     
+    // Remove leading \r\n
+    if (part[0] === 0x0D && part[1] === 0x0A) {
+      part = part.slice(2);
+    }
+    
+    // Find end of headers (double \r\n)
+    const headerEnd = part.indexOf('\r\n\r\n');
     if (headerEnd !== -1) {
       const headers = part.slice(0, headerEnd).toString();
-      const content = part.slice(headerEnd + 4, part.length - 2); // Remove trailing \r\n
+      const content = part.slice(headerEnd + 4);
+      
+      // Remove trailing \r\n--
+      let cleanContent = content;
+      if (cleanContent.length >= 2 && 
+          cleanContent[cleanContent.length - 2] === 0x0D && 
+          cleanContent[cleanContent.length - 1] === 0x0A) {
+        cleanContent = cleanContent.slice(0, -2);
+      }
       
       const nameMatch = headers.match(/name="([^"]+)"/);
       const filenameMatch = headers.match(/filename="([^"]+)"/);
-      const contentTypeMatch = headers.match(/Content-Type:\s*([^\r\n]+)/i);
+      const contentTypeMatch = headers.match(/Content-Type: ([^\r\n]+)/);
       
       if (nameMatch) {
         parts.push({
           name: nameMatch[1],
           filename: filenameMatch ? filenameMatch[1] : null,
           contentType: contentTypeMatch ? contentTypeMatch[1].trim() : null,
-          data: content
+          data: cleanContent
         });
       }
     }
@@ -199,144 +56,250 @@ function parseMultipartFormData(buffer, boundary) {
   return parts;
 }
 
+// Extract text from PDF buffer
+async function extractFromPDF(buffer) {
+  try {
+    const data = await pdfParse(buffer);
+    return data.text;
+  } catch (error) {
+    console.error('PDF parsing error:', error);
+    throw new Error('Failed to parse PDF: ' + error.message);
+  }
+}
+
+// Extract text from image using OCR
+async function extractFromImage(buffer) {
+  const worker = await createWorker('eng');
+  try {
+    // Convert buffer to base64 for Tesseract
+    const base64 = buffer.toString('base64');
+    const dataUrl = `data:image/png;base64,${base64}`;
+    
+    const { data: { text } } = await worker.recognize(dataUrl);
+    return text;
+  } finally {
+    await worker.terminate();
+  }
+}
+
+// Extract biomarkers from text using regex patterns
+function extractBiomarkers(text) {
+  const biomarkers = [];
+  const patterns = {
+    hemoglobin: {
+      patterns: [/hemoglobin[\s:]+(\d+\.?\d*)/i, /\bhgb?[\s:]+(\d+\.?\d*)/i],
+      unit: 'g/dL'
+    },
+    glucose: {
+      patterns: [/glucose[\s:]+(\d+\.?\d*)/i, /blood sugar[\s:]+(\d+\.?\d*)/i, /fasting glucose[\s:]+(\d+\.?\d*)/i],
+      unit: 'mg/dL'
+    },
+    totalCholesterol: {
+      patterns: [/total cholesterol[\s:]+(\d+\.?\d*)/i, /cholesterol[\s:]+(\d+\.?\d*)/i],
+      unit: 'mg/dL'
+    },
+    hdl: {
+      patterns: [/hdl[\s:]+(\d+\.?\d*)/i, /hdl cholesterol[\s:]+(\d+\.?\d*)/i],
+      unit: 'mg/dL'
+    },
+    ldl: {
+      patterns: [/ldl[\s:]+(\d+\.?\d*)/i, /ldl cholesterol[\s:]+(\d+\.?\d*)/i],
+      unit: 'mg/dL'
+    },
+    triglycerides: {
+      patterns: [/triglycerides?[\s:]+(\d+\.?\d*)/i],
+      unit: 'mg/dL'
+    },
+    wbc: {
+      patterns: [/wbc[\s:]+(\d+\.?\d*)/i, /white blood cell[\s:]+(\d+\.?\d*)/i, /leukocyte[\s:]+(\d+\.?\d*)/i],
+      unit: 'K/µL'
+    },
+    rbc: {
+      patterns: [/rbc[\s:]+(\d+\.?\d*)/i, /red blood cell[\s:]+(\d+\.?\d*)/i, /erythrocyte[\s:]+(\d+\.?\d*)/i],
+      unit: 'M/µL'
+    },
+    platelets: {
+      patterns: [/platelet[\s:]+(\d+\.?\d*)/i, /plt[\s:]+(\d+\.?\d*)/i, /thrombocyte[\s:]+(\d+\.?\d*)/i],
+      unit: 'K/µL'
+    },
+    creatinine: {
+      patterns: [/creatinine[\s:]+(\d+\.?\d*)/i, /creat[\s:]+(\d+\.?\d*)/i],
+      unit: 'mg/dL'
+    },
+    alt: {
+      patterns: [/alt[\s:]+(\d+\.?\d*)/i, /alanine[\s:]+(\d+\.?\d*)/i, /sgpt[\s:]+(\d+\.?\d*)/i],
+      unit: 'U/L'
+    },
+    ast: {
+      patterns: [/ast[\s:]+(\d+\.?\d*)/i, /aspartate[\s:]+(\d+\.?\d*)/i, /sgot[\s:]+(\d+\.?\d*)/i],
+      unit: 'U/L'
+    }
+  };
+
+  let totalConfidence = 0;
+
+  for (const [id, config] of Object.entries(patterns)) {
+    for (const pattern of config.patterns) {
+      const match = text.match(pattern);
+      if (match) {
+        const value = parseFloat(match[1]);
+        if (!isNaN(value) && value > 0) {
+          biomarkers.push({
+            id,
+            value,
+            unit: config.unit,
+            confidence: 0.85
+          });
+          totalConfidence += 0.85;
+          break;
+        }
+      }
+    }
+  }
+
+  const avgConfidence = biomarkers.length > 0 ? totalConfidence / biomarkers.length : 0;
+
+  return {
+    biomarkers,
+    confidence: avgConfidence,
+    extractedText: text.substring(0, 1000)
+  };
+}
+
+// Extract patient profile from text
+function extractProfile(text) {
+  const profile = {};
+  
+  const ageMatch = text.match(/age[:\s]+(\d+)/i) || text.match(/(\d+)\s*years?\s*old/i);
+  if (ageMatch) profile.age = parseInt(ageMatch[1]);
+  
+  const genderMatch = text.match(/gender[:\s]+(male|female)/i) || text.match(/(male|female)/i);
+  if (genderMatch) profile.gender = genderMatch[1].toLowerCase();
+  
+  return profile;
+}
+
+// Main handler
 module.exports = async (req, res) => {
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Content-Length');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
   if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+    return res.status(200).end();
   }
   
   if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed' });
-    return;
+    return res.status(405).json({ error: 'Method not allowed' });
   }
-  
+
   try {
     console.log('Extract API called');
+    console.log('Content-Type:', req.headers['content-type']);
     
-    // Get content type and boundary
-    const contentType = req.headers['content-type'] || '';
-    console.log('Content-Type:', contentType);
-    
-    if (!contentType.includes('multipart/form-data')) {
+    const contentType = req.headers['content-type'];
+    if (!contentType || !contentType.includes('multipart/form-data')) {
       return res.status(400).json({ 
-        error: 'Invalid content type. Expected multipart/form-data' 
+        error: 'Invalid content type',
+        received: contentType,
+        expected: 'multipart/form-data'
       });
     }
-    
-    // Extract boundary
-    const boundaryMatch = contentType.match(/boundary=([^;]+)/);
-    if (!boundaryMatch) {
-      return res.status(400).json({ error: 'No boundary found in content-type' });
-    }
-    const boundary = boundaryMatch[1].trim().replace(/['"]/g, '');
-    console.log('Boundary:', boundary);
-    
-    // Collect raw body data
+
+    // Get the raw body as buffer
     const chunks = [];
     for await (const chunk of req) {
       chunks.push(chunk);
     }
     const buffer = Buffer.concat(chunks);
-    console.log('Received buffer size:', buffer.length);
     
+    console.log('Received buffer size:', buffer.length);
+
     if (buffer.length === 0) {
       return res.status(400).json({ error: 'No file data received' });
     }
-    
+
     // Parse multipart form
-    const parts = parseMultipartFormData(buffer, boundary);
+    const parts = parseMultipartForm(buffer, contentType);
     console.log('Parsed parts:', parts.length);
     
-    // Find file part
-    const filePart = parts.find(p => p.filename && p.data.length > 0);
+    const filePart = parts.find(p => p.filename && p.name === 'file');
     if (!filePart) {
-      return res.status(400).json({ error: 'No file found in upload' });
+      return res.status(400).json({ 
+        error: 'No file found in request',
+        parts: parts.map(p => ({ name: p.name, filename: p.filename }))
+      });
     }
-    
+
     console.log('File found:', filePart.filename, 'Type:', filePart.contentType);
-    
-    let extractedText = '';
-    let biomarkers = [];
-    let ocrUsed = false;
-    
-    // Handle PDF files
-    const isPDF = filePart.filename.toLowerCase().endsWith('.pdf') || 
-                  filePart.contentType === 'application/pdf';
-    
+
+    // Validate file size (10MB limit)
+    if (filePart.data.length > 10 * 1024 * 1024) {
+      return res.status(400).json({ error: 'File too large (max 10MB)' });
+    }
+
+    let text = '';
+    const isPDF = filePart.contentType === 'application/pdf' || 
+                  filePart.filename.toLowerCase().endsWith('.pdf');
     const isImage = filePart.contentType?.startsWith('image/') ||
-                    /\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(filePart.filename);
-    
+                   /\.(jpg|jpeg|png|gif|bmp|webp)$/i.test(filePart.filename);
+
+    console.log('File type:', isPDF ? 'PDF' : (isImage ? 'Image' : 'Unknown'));
+
     if (isPDF) {
-      console.log('Processing PDF...');
-      try {
-        const pdfData = await pdfParse(filePart.data);
-        extractedText = cleanText(pdfData.text);
-        console.log('PDF text extracted, length:', extractedText.length);
-      } catch (pdfError) {
-        console.error('PDF parsing error:', pdfError.message);
-        return res.status(500).json({
-          error: 'Failed to parse PDF',
-          message: pdfError.message
-        });
-      }
+      console.log('Extracting from PDF...');
+      text = await extractFromPDF(filePart.data);
+      console.log('PDF text extracted, length:', text.length);
     } else if (isImage) {
-      console.log('Image uploaded, OCR not available in this deployment');
-      ocrUsed = true;
-      return res.status(200).json({
-        success: true,
-        partial: true,
-        message: 'Image uploaded. OCR processing is not available in serverless environment. Please use PDF format or enter values manually.',
-        filename: filePart.filename,
-        mimeType: filePart.contentType,
-        biomarkers: [],
-        extractedInfo: {}
-      });
+      console.log('Extracting from image with OCR...');
+      text = await extractFromImage(filePart.data);
+      console.log('Image text extracted, length:', text.length);
     } else {
-      return res.status(400).json({
-        error: 'Unsupported file type',
-        message: 'Please upload PDF or image (JPG, PNG)'
+      return res.status(400).json({ 
+        error: 'Unsupported file type. Please upload PDF or image (JPG, PNG)',
+        received: filePart.contentType
       });
     }
-    
-    // Extract biomarkers from text
-    biomarkers = extractBiomarkersFromText(extractedText);
-    console.log('Biomarkers found:', biomarkers.length);
-    
-    // Extract patient info
-    const ageMatch = extractedText.match(/age[:\s]+(\d+)/i) || 
-                     extractedText.match(/(\d+)\s*(?:years?|yrs?)/i);
-    const genderMatch = extractedText.match(/gender[:\s]+(male|female)/i) ||
-                        extractedText.match(/\b(male|female)\b/i);
-    
-    const response = {
+
+    if (!text || text.trim().length === 0) {
+      return res.status(400).json({ 
+        error: 'No text could be extracted from the file'
+      });
+    }
+
+    console.log('Extracting biomarkers from text...');
+    const profile = extractProfile(text);
+    const biomarkerResult = extractBiomarkers(text);
+
+    console.log('Found biomarkers:', biomarkerResult.biomarkers.length);
+    console.log('Profile:', profile);
+
+    return res.status(200).json({
       success: true,
-      filename: filePart.filename,
-      mimeType: filePart.contentType,
-      ocrUsed: ocrUsed,
-      extractedInfo: {
-        age: ageMatch ? parseInt(ageMatch[1]) : null,
-        gender: genderMatch ? genderMatch[1].toLowerCase() : null
-      },
-      biomarkersFound: biomarkers.length,
-      biomarkers: biomarkers,
-      textPreview: extractedText.substring(0, 500) + (extractedText.length > 500 ? '...' : ''),
-      confidence: biomarkers.length > 0 ? 'high' : 'low'
-    };
-    
-    console.log('Sending response with', biomarkers.length, 'biomarkers');
-    res.status(200).json(response);
-    
+      profile: Object.keys(profile).length > 0 ? profile : null,
+      biomarkers: biomarkerResult.biomarkers,
+      confidence: biomarkerResult.confidence,
+      extractedText: biomarkerResult.extractedText,
+      filename: filePart.filename
+    });
+
   } catch (error) {
     console.error('Extraction error:', error);
-    res.status(500).json({ 
-      error: 'Extraction failed', 
+    console.error('Stack:', error.stack);
+    
+    return res.status(500).json({
+      error: 'Extraction failed',
       message: error.message,
       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
+  }
+};
+
+// Vercel config
+module.exports.config = {
+  api: {
+    bodyParser: false,
+    responseLimit: '10mb'
   }
 };
