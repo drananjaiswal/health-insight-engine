@@ -6,7 +6,8 @@
     "start": "vercel dev"
   },
   "dependencies": {
-    "form-data": "^4.0.0"
+    "form-data": "^4.0.0",
+    "pdf-parse": "^1.1.1"
   },
   "engines": {
     "node": "24.x"
