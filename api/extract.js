@@ -1,11 +1,8 @@
-// /api/extract.js - Enhanced with OCR.space API for better extraction
+// /api/extract.js - Fixed OCR.space API integration
 const pdfParse = require('pdf-parse');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-
-// OCR.space API endpoint
-const OCR_SPACE_API_URL = 'https://api.ocr.space/parse/image';
 
 // Parse multipart form data manually for Vercel
 async function parseMultipartFormData(req) {
@@ -19,7 +16,6 @@ async function parseMultipartFormData(req) {
     throw new Error('Boundary not found in content-type');
   }
 
-  // Read raw body
   const chunks = [];
   for await (const chunk of req) {
     chunks.push(chunk);
@@ -28,7 +24,6 @@ async function parseMultipartFormData(req) {
   
   console.log(`Total request size: ${buffer.length} bytes`);
 
-  // Find the file content
   const boundaryBuffer = Buffer.from(`--${boundary}`);
   const endBoundaryBuffer = Buffer.from(`--${boundary}--`);
   
@@ -49,8 +44,6 @@ async function parseMultipartFormData(req) {
     start = endIndex;
   }
 
-  console.log(`Found ${parts.length} parts`);
-  
   let fileBuffer = null;
   let fileName = null;
   let fileType = null;
@@ -61,8 +54,6 @@ async function parseMultipartFormData(req) {
     
     const header = part.slice(0, headerEnd).toString();
     const content = part.slice(headerEnd + 4);
-    
-    // Remove trailing \r\n
     const cleanContent = content.slice(0, content.length - 2);
     
     if (header.includes('filename=')) {
@@ -70,7 +61,6 @@ async function parseMultipartFormData(req) {
       fileName = nameMatch ? nameMatch[1] : 'unknown';
       fileBuffer = cleanContent;
       
-      // Detect file type from content
       if (cleanContent.slice(0, 4).toString() === '%PDF') {
         fileType = 'application/pdf';
       } else if (cleanContent.slice(0, 8).toString().includes('PNG')) {
@@ -96,60 +86,97 @@ async function parseMultipartFormData(req) {
   return { fileBuffer, fileName, fileType };
 }
 
-// Use OCR.space API for better text extraction
+// Extract text using OCR.space API
 async function extractWithOCRSpace(fileBuffer, fileType) {
   console.log('Using OCR.space API for extraction...');
   
   try {
-    // Convert buffer to base64
-    const base64Image = fileBuffer.toString('base64');
+    // Create form data using FormData API
+    const FormData = require('form-data');
+    const form = new FormData();
     
-    // Determine if it's PDF or image
+    // Add the file
     const isPdf = fileType === 'application/pdf';
+    const filename = isPdf ? 'document.pdf' : 'image.jpg';
     
-    // Build form data
-    const formData = new URLSearchParams();
-    formData.append('base64Image', `data:${isPdf ? 'application/pdf' : 'image/jpeg'};base64,${base64Image}`);
-    formData.append('language', 'eng');
-    formData.append('isCreateSearchablePdf', 'false');
-    formData.append('isSearchablePdfHideTextLayer', 'false');
-    formData.append('scale', 'true');
-    formData.append('detectOrientation', 'true');
-    formData.append('OCREngine', '2'); // Engine 2 is better for tables
+    form.append('file', fileBuffer, {
+      filename: filename,
+      contentType: isPdf ? 'application/pdf' : 'image/jpeg',
+    });
+    
+    // Add other parameters
+    form.append('language', 'eng');
+    form.append('isCreateSearchablePdf', 'false');
+    form.append('isSearchablePdfHideTextLayer', 'false');
+    form.append('scale', 'true');
+    form.append('detectOrientation', 'true');
+    form.append('OCREngine', '2');
     
     console.log('Sending request to OCR.space API...');
     
-    const response = await fetch(OCR_SPACE_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: formData.toString(),
+    const https = require('https');
+    
+    return new Promise((resolve, reject) => {
+      const requestOptions = {
+        hostname: 'api.ocr.space',
+        path: '/parse/image',
+        method: 'POST',
+        headers: {
+          ...form.getHeaders(),
+        },
+      };
+      
+      const request = https.request(requestOptions, (response) => {
+        let data = '';
+        
+        response.on('data', (chunk) => {
+          data += chunk;
+        });
+        
+        response.on('end', () => {
+          try {
+            console.log('OCR.space raw response:', data.substring(0, 500));
+            
+            // Check if response is HTML (error page)
+            if (data.trim().startsWith('<') || data.trim().startsWith('<!')) {
+              reject(new Error('OCR.space returned HTML error page'));
+              return;
+            }
+            
+            const result = JSON.parse(data);
+            console.log('OCR.space parsed response:', JSON.stringify(result, null, 2));
+            
+            if (result.IsErroredOnProcessing) {
+              reject(new Error(`OCR Error: ${result.ErrorMessage || 'Unknown error'}`));
+              return;
+            }
+            
+            if (!result.ParsedResults || result.ParsedResults.length === 0) {
+              reject(new Error('No text found in document'));
+              return;
+            }
+            
+            let extractedText = '';
+            for (const parsedResult of result.ParsedResults) {
+              extractedText += parsedResult.ParsedText + '\n';
+            }
+            
+            console.log('OCR.space extracted text length:', extractedText.length);
+            resolve(extractedText);
+            
+          } catch (parseError) {
+            reject(new Error(`Failed to parse OCR response: ${parseError.message}`));
+          }
+        });
+      });
+      
+      request.on('error', (error) => {
+        reject(new Error(`OCR.space request failed: ${error.message}`));
+      });
+      
+      // Pipe form data to request
+      form.pipe(request);
     });
-    
-    if (!response.ok) {
-      throw new Error(`OCR.space API error: ${response.status}`);
-    }
-    
-    const data = await response.json();
-    console.log('OCR.space response:', JSON.stringify(data, null, 2));
-    
-    if (data.IsErroredOnProcessing) {
-      throw new Error(`OCR Error: ${data.ErrorMessage || 'Unknown error'}`);
-    }
-    
-    if (!data.ParsedResults || data.ParsedResults.length === 0) {
-      throw new Error('No text found in document');
-    }
-    
-    // Combine all parsed results
-    let extractedText = '';
-    for (const result of data.ParsedResults) {
-      extractedText += result.ParsedText + '\n';
-    }
-    
-    console.log('OCR.space extracted text length:', extractedText.length);
-    return extractedText;
     
   } catch (error) {
     console.error('OCR.space API error:', error);
@@ -161,7 +188,6 @@ async function extractWithOCRSpace(fileBuffer, fileType) {
 async function extractWithLocalPDF(fileBuffer) {
   console.log('Using local PDF parsing...');
   
-  // Write to temp file
   const tempDir = os.tmpdir();
   const tempFile = path.join(tempDir, `upload-${Date.now()}.pdf`);
   
@@ -180,7 +206,6 @@ async function extractWithLocalPDF(fileBuffer) {
     throw error;
     
   } finally {
-    // Clean up
     try {
       if (fs.existsSync(tempFile)) {
         fs.unlinkSync(tempFile);
@@ -192,7 +217,7 @@ async function extractWithLocalPDF(fileBuffer) {
   }
 }
 
-// Enhanced biomarker extraction with multiple strategies
+// Enhanced biomarker extraction
 function extractBiomarkersFromText(text) {
   console.log('\n=== Starting biomarker extraction ===');
   console.log('Text preview:', text.substring(0, 500));
@@ -200,9 +225,7 @@ function extractBiomarkersFromText(text) {
   const biomarkers = [];
   const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
   
-  // Define biomarker patterns with flexible matching
   const patterns = [
-    // Hemoglobin variations
     {
       id: 'hemoglobin',
       names: ['hemoglobin', 'hb', 'hgb', 'haemoglobin'],
@@ -214,7 +237,6 @@ function extractBiomarkersFromText(text) {
         /(\d+\.?\d*)\s*(g\/dL|gm\/dL|g%|g\/dl).*hemoglobin/i,
       ]
     },
-    // Glucose variations
     {
       id: 'glucose',
       names: ['glucose', 'sugar', 'fasting glucose', 'blood sugar'],
@@ -226,7 +248,6 @@ function extractBiomarkersFromText(text) {
         /(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%).*glucose/i,
       ]
     },
-    // Total Cholesterol
     {
       id: 'total_cholesterol',
       names: ['total cholesterol', 'cholesterol total', 'cholesterol'],
@@ -238,7 +259,6 @@ function extractBiomarkersFromText(text) {
         /(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%).*cholesterol/i,
       ]
     },
-    // HDL
     {
       id: 'hdl',
       names: ['hdl', 'hdl cholesterol', 'good cholesterol'],
@@ -249,7 +269,6 @@ function extractBiomarkersFromText(text) {
         /(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%).*hdl/i,
       ]
     },
-    // LDL
     {
       id: 'ldl',
       names: ['ldl', 'ldl cholesterol', 'bad cholesterol'],
@@ -260,7 +279,6 @@ function extractBiomarkersFromText(text) {
         /(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%).*ldl/i,
       ]
     },
-    // Triglycerides
     {
       id: 'triglycerides',
       names: ['triglycerides', 'triglyceride'],
@@ -271,7 +289,6 @@ function extractBiomarkersFromText(text) {
         /(\d+\.?\d*)\s*(mg\/dL|mg\/dl|mg%).*triglycerides?/i,
       ]
     },
-    // WBC
     {
       id: 'wbc',
       names: ['wbc', 'white blood cell', 'leukocyte', 'total leucocyte count'],
@@ -284,7 +301,6 @@ function extractBiomarkersFromText(text) {
         /tlc[\s:)*]*(\d+\.?\d*)/i,
       ]
     },
-    // RBC
     {
       id: 'rbc',
       names: ['rbc', 'red blood cell', 'erythrocyte'],
@@ -296,7 +312,6 @@ function extractBiomarkersFromText(text) {
         /erythrocyte[\s:)*]*(\d+\.?\d*)/i,
       ]
     },
-    // Platelets
     {
       id: 'platelets',
       names: ['platelet', 'platelets', 'plt', 'thrombocyte'],
@@ -307,7 +322,6 @@ function extractBiomarkersFromText(text) {
         /plt[\s:)*]*(\d+\.?\d*)/i,
       ]
     },
-    // Creatinine
     {
       id: 'creatinine',
       names: ['creatinine', 'creat', 's creatinine'],
@@ -318,7 +332,6 @@ function extractBiomarkersFromText(text) {
         /s\.?\s*creatinine[\s:)*]*(\d+\.?\d*)/i,
       ]
     },
-    // ALT
     {
       id: 'alt',
       names: ['alt', 'alanine aminotransferase', 'sgpt'],
@@ -329,7 +342,6 @@ function extractBiomarkersFromText(text) {
         /sgpt[\s:)*]*(\d+\.?\d*)/i,
       ]
     },
-    // AST
     {
       id: 'ast',
       names: ['ast', 'aspartate aminotransferase', 'sgot'],
@@ -342,49 +354,31 @@ function extractBiomarkersFromText(text) {
     },
   ];
   
-  // Method 1: Table format parsing (lines with 3+ columns separated by | or spaces)
-  console.log('\n--- Trying table format parsing ---');
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    
-    // Skip short lines
-    if (line.length < 10) continue;
-    
-    // Try to match each biomarker pattern
-    for (const pattern of patterns) {
-      // Check if this line contains the biomarker name
-      const hasName = pattern.names.some(name => 
-        line.toLowerCase().includes(name.toLowerCase())
-      );
-      
-      if (hasName) {
-        console.log(`Found potential biomarker in line: "${line}"`);
-        
-        // Try all regex patterns for this biomarker
-        for (const regex of pattern.patterns) {
-          const match = line.match(regex);
-          if (match) {
-            let value = parseFloat(match[1]);
-            
-            // Validate value is reasonable
-            if (value > 0 && value < 10000) {
-              biomarkers.push({
-                id: pattern.id,
-                name: pattern.names[0].charAt(0).toUpperCase() + pattern.names[0].slice(1),
-                value: value,
-                unit: pattern.unit,
-                category: pattern.category
-              });
-              console.log(`✓ Extracted: ${pattern.id} = ${value} ${pattern.unit}`);
-              break; // Found this biomarker, move to next
-            }
+  // Method 1: Direct regex matching
+  console.log('\n--- Trying direct regex matching ---');
+  for (const pattern of patterns) {
+    for (const regex of pattern.patterns) {
+      const match = text.match(regex);
+      if (match) {
+        const value = parseFloat(match[1]);
+        if (value > 0 && value < 10000) {
+          // Check if not already found
+          if (!biomarkers.find(b => b.id === pattern.id)) {
+            biomarkers.push({
+              id: pattern.id,
+              name: pattern.names[0].charAt(0).toUpperCase() + pattern.names[0].slice(1),
+              value: value,
+              unit: pattern.unit,
+              category: pattern.category
+            });
+            console.log(`✓ Extracted: ${pattern.id} = ${value} ${pattern.unit}`);
           }
         }
       }
     }
   }
   
-  // Method 2: Look for values in nearby lines
+  // Method 2: Line-by-line extraction
   console.log('\n--- Trying line-by-line extraction ---');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].toLowerCase();
@@ -404,8 +398,7 @@ function extractBiomarkersFromText(text) {
           if (numberMatch) {
             const value = parseFloat(numberMatch[1]);
             
-            // Basic validation
-            if (value > 0 && value < 10000 && !biomarkers.find(b => b.id === pattern.id)) {
+            if (value > 0 && value < 10000) {
               biomarkers.push({
                 id: pattern.id,
                 name: pattern.names[0].charAt(0).toUpperCase() + pattern.names[0].slice(1),
@@ -436,13 +429,12 @@ function extractBiomarkersFromText(text) {
   return uniqueBiomarkers;
 }
 
-// Extract patient info from text
+// Extract patient info
 function extractPatientInfo(text) {
   const info = { age: null, gender: null, region: null };
   
   console.log('\n=== Extracting patient info ===');
   
-  // Age patterns
   const agePatterns = [
     /age\s*[:\/\s]*\s*(\d+)\s*(years?|yrs?|y)?/i,
     /(\d+)\s*(years?|yrs?|y)\s*(old)?/i,
@@ -459,7 +451,6 @@ function extractPatientInfo(text) {
     }
   }
   
-  // Gender patterns
   const genderPatterns = [
     { pattern: /\bmale\b/i, value: 'male' },
     { pattern: /\bfemale\b/i, value: 'female' },
@@ -469,7 +460,6 @@ function extractPatientInfo(text) {
     { pattern: /\bmiss\b/i, value: 'female' },
     { pattern: /\bms\.?\b/i, value: 'female' },
     { pattern: /\bmrs\.?\b/i, value: 'female' },
-    { pattern: /male\s*\/\s*female/i, value: null },
   ];
   
   for (const { pattern, value } of genderPatterns) {
@@ -490,7 +480,6 @@ function extractPatientInfo(text) {
 
 // Main handler
 module.exports = async (req, res) => {
-  // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -508,12 +497,10 @@ module.exports = async (req, res) => {
     console.log('Starting extraction request...');
     console.log('========================================\n');
     
-    // Parse multipart form data
     const { fileBuffer, fileName, fileType } = await parseMultipartFormData(req);
     
     console.log(`Processing file: ${fileName} (${fileType})`);
     
-    // Extract text based on file type
     let extractedText = '';
     
     if (fileType === 'application/pdf') {
@@ -525,25 +512,20 @@ module.exports = async (req, res) => {
         extractedText = await extractWithLocalPDF(fileBuffer);
       }
     } else if (fileType.startsWith('image/')) {
-      // Use OCR.space for images
       extractedText = await extractWithOCRSpace(fileBuffer, fileType);
     } else {
       throw new Error('Unsupported file type. Please upload a PDF or image file.');
     }
     
     if (!extractedText || extractedText.trim().length === 0) {
-      throw new Error('No text could be extracted from the file. The file may be scanned or image-based.');
+      throw new Error('No text could be extracted from the file.');
     }
     
     console.log(`\nExtracted ${extractedText.length} characters of text`);
     
-    // Extract patient info
     const profile = extractPatientInfo(extractedText);
-    
-    // Extract biomarkers
     const biomarkers = extractBiomarkersFromText(extractedText);
     
-    // Prepare response
     const response = {
       success: biomarkers.length > 0,
       biomarkers: biomarkers,
@@ -565,7 +547,6 @@ module.exports = async (req, res) => {
     res.status(500).json({ 
       error: 'Extraction failed', 
       details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };

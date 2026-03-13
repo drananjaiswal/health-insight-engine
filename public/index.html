@@ -1536,15 +1536,31 @@
                     showSuccess(`✓ Extracted ${data.biomarkers.length} biomarkers from your report!`);
                 } else {
                     // Show debugging info
-                    console.log('Extracted text sample:', data.extractedText);
+                    console.log('Full extracted text:', data.extractedText);
+                    console.log('Profile info:', data.extractedInfo);
                     
                     let debugInfo = 'No biomarkers found in the file.';
                     if (data.extractedText) {
-                        const textPreview = data.extractedText.substring(0, 200).replace(/\n/g, ' ');
-                        debugInfo += `\n\nExtracted text preview: "${textPreview}..."`;
+                        // Show more context with proper formatting
+                        const textPreview = data.extractedText
+                            .substring(0, 1000)
+                            .replace(/</g, '&lt;')
+                            .replace(/>/g, '&gt;')
+                            .replace(/\n/g, '<br>');
+                        
+                        debugInfo = `<div style="text-align: left; background: #f8fafc; padding: 15px; border-radius: 8px; margin: 10px 0;">
+                            <p><strong>📄 Extracted Text Preview:</strong></p>
+                            <pre style="background: #fff; padding: 10px; border: 1px solid #e2e8f0; border-radius: 4px; font-size: 11px; max-height: 250px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; color: #334155;">${textPreview}${data.extractedText.length > 1000 ? '...' : ''}</pre>
+                            <p style="margin-top: 10px; font-size: 12px; color: #64748b;">
+                                <strong>Looking for patterns like:</strong><br>
+                                • Hemoglobin: 14.2 g/dL<br>
+                                • Glucose: 95 mg/dL<br>
+                                • Cholesterol Total: 180 mg/dL
+                            </p>
+                        </div>`;
                     }
                     
-                    showError(`${debugInfo}\n\nPlease enter values manually.`);
+                    showError(`${debugInfo}<br>Please enter values manually or share your report format with us for better extraction.`);
                     // Keep at least one empty entry
                     if (document.querySelectorAll('.biomarker-entry').length === 0) {
                         addBiomarkerEntry();
