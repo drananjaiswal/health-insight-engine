@@ -85,72 +85,163 @@ async function extractFromImage(buffer) {
 // Extract biomarkers from text using regex patterns
 function extractBiomarkers(text) {
   const biomarkers = [];
+  
+  // More flexible patterns - handles various formats
   const patterns = {
     hemoglobin: {
-      patterns: [/hemoglobin[\s:]+(\d+\.?\d*)/i, /\bhgb?[\s:]+(\d+\.?\d*)/i],
-      unit: 'g/dL'
+      // Matches: Hemoglobin: 12.5, HGB 12.5, Hb 12.5, Hemoglobin 12.5 g/dL
+      patterns: [
+        /hemoglobin[:\s]+(\d+[.,]?\d*)\s*(?:g\/dL|g\/dl|gdl)?/i,
+        /\bhgb?[:\s]+(\d+[.,]?\d*)\s*(?:g\/dL|g\/dl|gdl)?/i,
+        /\bhb[:\s]+(\d+[.,]?\d*)\s*(?:g\/dL|g\/dl|gdl)?/i,
+        /(?:^|\n)\s*(?:blood\s+)?hemoglobin\s*(?:\(HGB\))?\s*[:\s]+(\d+[.,]?\d*)/mi
+      ],
+      unit: 'g/dL',
+      category: 'Blood'
     },
     glucose: {
-      patterns: [/glucose[\s:]+(\d+\.?\d*)/i, /blood sugar[\s:]+(\d+\.?\d*)/i, /fasting glucose[\s:]+(\d+\.?\d*)/i],
-      unit: 'mg/dL'
+      // Matches: Glucose: 95, Blood Sugar 95 mg/dL, Fasting Glucose 95
+      patterns: [
+        /(?:fasting\s+)?glucose[:\s]+(\d+[.,]?\d*)\s*(?:mg\/dL|mg\/dl|mg%)?/i,
+        /blood\s+sugar[:\s]+(\d+[.,]?\d*)\s*(?:mg\/dL|mg\/dl|mg%)?/i,
+        /glucose\s*(?:\(FBS\))?\s*[:\s]+(\d+[.,]?\d*)/i
+      ],
+      unit: 'mg/dL',
+      category: 'Metabolic'
     },
     totalCholesterol: {
-      patterns: [/total cholesterol[\s:]+(\d+\.?\d*)/i, /cholesterol[\s:]+(\d+\.?\d*)/i],
-      unit: 'mg/dL'
+      // Matches: Total Cholesterol: 180, Cholesterol 180 mg/dL
+      patterns: [
+        /total\s+cholesterol[:\s]+(\d+[.,]?\d*)\s*(?:mg\/dL|mg\/dl|mg%)?/i,
+        /cholesterol[,:]?\s*total[:\s]+(\d+[.,]?\d*)/i,
+        /\bt\.?\s*cholesterol[:\s]+(\d+[.,]?\d*)/i
+      ],
+      unit: 'mg/dL',
+      category: 'Lipid'
     },
     hdl: {
-      patterns: [/hdl[\s:]+(\d+\.?\d*)/i, /hdl cholesterol[\s:]+(\d+\.?\d*)/i],
-      unit: 'mg/dL'
+      // Matches: HDL: 45, HDL Cholesterol 45, HDL-C 45
+      patterns: [
+        /hdl[-\s]?(?:c|cholesterol)?[:\s]+(\d+[.,]?\d*)\s*(?:mg\/dL|mg\/dl|mg%)?/i,
+        /hdl\s*[:\s]+(\d+[.,]?\d*)/i
+      ],
+      unit: 'mg/dL',
+      category: 'Lipid'
     },
     ldl: {
-      patterns: [/ldl[\s:]+(\d+\.?\d*)/i, /ldl cholesterol[\s:]+(\d+\.?\d*)/i],
-      unit: 'mg/dL'
+      // Matches: LDL: 100, LDL Cholesterol 100, LDL-C 100
+      patterns: [
+        /ldl[-\s]?(?:c|cholesterol)?[:\s]+(\d+[.,]?\d*)\s*(?:mg\/dL|mg\/dl|mg%)?/i,
+        /ldl\s*[:\s]+(\d+[.,]?\d*)/i
+      ],
+      unit: 'mg/dL',
+      category: 'Lipid'
     },
     triglycerides: {
-      patterns: [/triglycerides?[\s:]+(\d+\.?\d*)/i],
-      unit: 'mg/dL'
+      // Matches: Triglycerides: 150, Triglyceride 150 mg/dL
+      patterns: [
+        /triglycerides?[:\s]+(\d+[.,]?\d*)\s*(?:mg\/dL|mg\/dl|mg%)?/i,
+        /tg[:\s]+(\d+[.,]?\d*)/i
+      ],
+      unit: 'mg/dL',
+      category: 'Lipid'
     },
     wbc: {
-      patterns: [/wbc[\s:]+(\d+\.?\d*)/i, /white blood cell[\s:]+(\d+\.?\d*)/i, /leukocyte[\s:]+(\d+\.?\d*)/i],
-      unit: 'K/µL'
+      // Matches: WBC: 7500, White Blood Cell 7.5, WBC Count 7500
+      patterns: [
+        /wbc[:\s]+(\d+[.,]?\d*)\s*(?:K\/µL|k\/ul|cells\/mm3|\/mm3)?/i,
+        /white\s+blood\s+cell[:\s]+(\d+[.,]?\d*)/i,
+        /leukocyte[:\s]+(\d+[.,]?\d*)/i,
+        /(?:total\s+)?wbc\s*count[:\s]+(\d+[.,]?\d*)/i
+      ],
+      unit: 'K/µL',
+      category: 'Blood'
     },
     rbc: {
-      patterns: [/rbc[\s:]+(\d+\.?\d*)/i, /red blood cell[\s:]+(\d+\.?\d*)/i, /erythrocyte[\s:]+(\d+\.?\d*)/i],
-      unit: 'M/µL'
+      // Matches: RBC: 4.5, Red Blood Cell 4.5, RBC Count 4.5
+      patterns: [
+        /rbc[:\s]+(\d+[.,]?\d*)\s*(?:M\/µL|m\/ul|million\/mm3)?/i,
+        /red\s+blood\s+cell[:\s]+(\d+[.,]?\d*)/i,
+        /erythrocyte[:\s]+(\d+[.,]?\d*)/i,
+        /(?:total\s+)?rbc\s*count[:\s]+(\d+[.,]?\d*)/i
+      ],
+      unit: 'M/µL',
+      category: 'Blood'
     },
     platelets: {
-      patterns: [/platelet[\s:]+(\d+\.?\d*)/i, /plt[\s:]+(\d+\.?\d*)/i, /thrombocyte[\s:]+(\d+\.?\d*)/i],
-      unit: 'K/µL'
+      // Matches: Platelets: 250, Platelet Count 250000, PLT 250
+      patterns: [
+        /platelets?[:\s]+(\d+[.,]?\d*)\s*(?:K\/µL|k\/ul|\/mm3)?/i,
+        /plt[:\s]+(\d+[.,]?\d*)/i,
+        /thrombocyte[:\s]+(\d+[.,]?\d*)/i,
+        /(?:platelet|plt)\s*count[:\s]+(\d+[.,]?\d*)/i
+      ],
+      unit: 'K/µL',
+      category: 'Blood'
     },
     creatinine: {
-      patterns: [/creatinine[\s:]+(\d+\.?\d*)/i, /creat[\s:]+(\d+\.?\d*)/i],
-      unit: 'mg/dL'
+      // Matches: Creatinine: 1.1, Creat 1.1 mg/dL
+      patterns: [
+        /creatinine[:\s]+(\d+[.,]?\d*)\s*(?:mg\/dL|mg\/dl|µmol\/L|umol\/l)?/i,
+        /creat\.?[:\s]+(\d+[.,]?\d*)/i
+      ],
+      unit: 'mg/dL',
+      category: 'Kidney'
     },
     alt: {
-      patterns: [/alt[\s:]+(\d+\.?\d*)/i, /alanine[\s:]+(\d+\.?\d*)/i, /sgpt[\s:]+(\d+\.?\d*)/i],
-      unit: 'U/L'
+      // Matches: ALT: 25, Alanine Aminotransferase 25, SGPT 25
+      patterns: [
+        /alt[:\s]+(\d+[.,]?\d*)\s*(?:U\/L|u\/l)?/i,
+        /alanine\s+(?:aminotransferase|transaminase)[:\s]+(\d+[.,]?\d*)/i,
+        /sgpt[:\s]+(\d+[.,]?\d*)/i
+      ],
+      unit: 'U/L',
+      category: 'Liver'
     },
     ast: {
-      patterns: [/ast[\s:]+(\d+\.?\d*)/i, /aspartate[\s:]+(\d+\.?\d*)/i, /sgot[\s:]+(\d+\.?\d*)/i],
-      unit: 'U/L'
+      // Matches: AST: 22, Aspartate Aminotransferase 22, SGOT 22
+      patterns: [
+        /ast[:\s]+(\d+[.,]?\d*)\s*(?:U\/L|u\/l)?/i,
+        /aspartate\s+(?:aminotransferase|transaminase)[:\s]+(\d+[.,]?\d*)/i,
+        /sgot[:\s]+(\d+[.,]?\d*)/i
+      ],
+      unit: 'U/L',
+      category: 'Liver'
     }
   };
 
   let totalConfidence = 0;
+  const foundIds = new Set();
+
+  // Normalize text - remove extra whitespace, normalize case
+  const normalizedText = text
+    .replace(/\r\n/g, '\n')
+    .replace(/\n+/g, '\n')
+    .replace(/\s+/g, ' ')
+    .trim();
 
   for (const [id, config] of Object.entries(patterns)) {
+    // Skip if already found this biomarker
+    if (foundIds.has(id)) continue;
+    
     for (const pattern of config.patterns) {
-      const match = text.match(pattern);
+      const match = normalizedText.match(pattern);
       if (match) {
-        const value = parseFloat(match[1]);
+        // Parse value, handling comma as decimal separator
+        let valueStr = match[1].replace(',', '.');
+        const value = parseFloat(valueStr);
+        
         if (!isNaN(value) && value > 0) {
           biomarkers.push({
             id,
+            name: id.charAt(0).toUpperCase() + id.slice(1).replace(/([A-Z])/g, ' $1'),
             value,
             unit: config.unit,
+            category: config.category,
             confidence: 0.85
           });
           totalConfidence += 0.85;
+          foundIds.add(id);
           break;
         }
       }
@@ -162,7 +253,7 @@ function extractBiomarkers(text) {
   return {
     biomarkers,
     confidence: avgConfidence,
-    extractedText: text.substring(0, 1000)
+    extractedText: normalizedText.substring(0, 2000)
   };
 }
 
@@ -170,11 +261,37 @@ function extractBiomarkers(text) {
 function extractProfile(text) {
   const profile = {};
   
-  const ageMatch = text.match(/age[:\s]+(\d+)/i) || text.match(/(\d+)\s*years?\s*old/i);
-  if (ageMatch) profile.age = parseInt(ageMatch[1]);
+  // Age patterns
+  const agePatterns = [
+    /age[:\s]+(\d+)/i,
+    /(\d+)\s*(?:years?\s*old|y\/o|yo)/i,
+    /age[:\s]+(\d+)\s*y/i,
+    /patient.*?(\d+)\s*years/i
+  ];
   
-  const genderMatch = text.match(/gender[:\s]+(male|female)/i) || text.match(/(male|female)/i);
-  if (genderMatch) profile.gender = genderMatch[1].toLowerCase();
+  for (const pattern of agePatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      profile.age = parseInt(match[1]);
+      break;
+    }
+  }
+  
+  // Gender patterns
+  const genderPatterns = [
+    /gender[:\s]+(male|female)/i,
+    /sex[:\s]+(male|female)/i,
+    /\b(male|female)\b/i,
+    /patient\s+(?:is\s+)?a\s+(male|female)/i
+  ];
+  
+  for (const pattern of genderPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      profile.gender = match[1].toLowerCase();
+      break;
+    }
+  }
   
   return profile;
 }
@@ -268,12 +385,15 @@ module.exports = async (req, res) => {
       });
     }
 
+    console.log('Sample of extracted text:', text.substring(0, 500));
+    
     console.log('Extracting biomarkers from text...');
     const profile = extractProfile(text);
     const biomarkerResult = extractBiomarkers(text);
 
     console.log('Found biomarkers:', biomarkerResult.biomarkers.length);
     console.log('Profile:', profile);
+    console.log('Biomarkers found:', biomarkerResult.biomarkers.map(b => `${b.id}: ${b.value}`).join(', '));
 
     return res.status(200).json({
       success: true,
