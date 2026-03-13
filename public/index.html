@@ -1463,25 +1463,45 @@
         async function handleFile(file) {
             const uploadArea = document.getElementById('uploadArea');
             
+            // Validate file type
+            const validTypes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
+            const fileExtension = file.name.toLowerCase().split('.').pop();
+            const isValidType = validTypes.includes(file.type) || ['pdf', 'jpg', 'jpeg', 'png'].includes(fileExtension);
+            
+            if (!isValidType) {
+                showError('Invalid file type. Please upload PDF, JPG, or PNG.');
+                resetUploadArea(file.name);
+                return;
+            }
+            
             // Show extraction loading state
             uploadArea.innerHTML = `
                 <div class="upload-icon">
                     <div class="spinner" style="width: 32px; height: 32px; border-width: 3px;"></div>
                 </div>
                 <h3>Extracting from ${file.name}...</h3>
-                <p>This may take a few moments</p>
+                <p>File size: ${(file.size / 1024).toFixed(1)} KB</p>
             `;
             
             try {
                 const formData = new FormData();
-                formData.append('file', file);
+                formData.append('file', file, file.name);
+                
+                console.log('Uploading file:', file.name, 'Type:', file.type, 'Size:', file.size);
                 
                 const response = await fetch('/api/extract', {
                     method: 'POST',
                     body: formData
                 });
                 
+                console.log('Response status:', response.status);
+                
                 const data = await response.json();
+                console.log('Response data:', data);
+                
+                if (!response.ok) {
+                    throw new Error(data.error || data.message || `HTTP ${response.status}: Extraction failed`);
+                }
                 
                 if (!data.success) {
                     throw new Error(data.error || 'Extraction failed');
@@ -1525,16 +1545,23 @@
             } catch (error) {
                 console.error('Extraction error:', error);
                 
-                uploadArea.innerHTML = `
-                    <div class="upload-icon" style="background: linear-gradient(135deg, #fee2e2, #fecaca);">⚠️</div>
-                    <h3>${file.name}</h3>
-                    <p>Extraction failed • Click to try again</p>
-                    <input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png" onchange="handleFileSelect(event)">
-                `;
-                setupDragAndDrop();
+                resetUploadArea(file.name);
                 
-                showError('Could not extract biomarkers automatically. Please enter values manually.');
+                // Show specific error message
+                const errorMsg = error.message || 'Could not extract biomarkers automatically';
+                showError(`${errorMsg}. Please enter values manually.`);
             }
+        }
+        
+        function resetUploadArea(filename) {
+            const uploadArea = document.getElementById('uploadArea');
+            uploadArea.innerHTML = `
+                <div class="upload-icon" style="background: linear-gradient(135deg, #fee2e2, #fecaca);">⚠️</div>
+                <h3>${filename || 'Upload failed'}</h3>
+                <p>Click to try again</p>
+                <input type="file" id="fileInput" accept=".pdf,.jpg,.jpeg,.png" onchange="handleFileSelect(event)">
+            `;
+            setupDragAndDrop();
         }
         
         function addBiomarkerEntryWithData(biomarkerId, value, unit) {
