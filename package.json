@@ -1,0 +1,18 @@
+{
+  "name": "health-insight-engine",
+  "version": "1.0.0",
+  "description": "Interpret biomarker values against personalized reference ranges and generate plain-language health insights",
+  "main": "api/index.js",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "keywords": ["health", "biomarkers", "lab-tests", "medical", "analytics"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "pdf-parse": "^1.1.1",
+    "formidable": "^3.5.1",
+    "tesseract.js": "^5.0.4"
+  }
+}
